@@ -75,11 +75,11 @@ SerializerErrorResp | Mime type and string to send as HTTP body for error code| 
 ### Serializer
 **Description:** Enable or disable the mod_serializer<br />
 **Syntax:** Serializer "on|off"<br />
-**Default:** SerializerPath "Off"<br />
+**Default:** Serializer "Off"<br />
 **Context:** [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub><br />
 **Compatibility:** 2.4<br />
 
-**Serializer** enables or disables the mod_serializer for this location, and any sub location. The value is case insensitive. Values to enable are:
+**Serializer** enables or disables the mod_serializer for this location, and any sub locations. The value is case insensitive. Values to enable are:
 * on
 * yes
 * 1
@@ -244,7 +244,6 @@ LogLevel serializer:debug
 # disable in anything else than /a/b path inside /a
 <LocationMatch "/a/[^b].*/">
     Serializer Off
-    SerializerPrefix "aOFF_"
 </LocationMatch>
 
 ```
@@ -321,7 +320,7 @@ a_0000160969386539149501000036834192.168.0.1<br />
 **a_0000160969386539491601000036848192.168.0.1**<br />
 a_0000160969386539565001000036850192.168.0.1<br />
 
-And the lock file for our request is "a_0000160969386539491601000036848192.168.0.1", the mod_seriaizer would wait as long as files:<br />
+And the lock file for our request is "**a_0000160969386539491601000036848192.168.0.1**", the mod_seriaizer would wait as long as files:<br />
 a_0000160969386537851501000036794192.168.0.1<br />
 a_0000160969386538884701000036824192.168.0.1<br />
 a_0000160969386539149501000036834192.168.0.1<br />
@@ -338,7 +337,7 @@ Also, mod_serializer configurations can be made with any other directory directi
 [&lt;FilesMatch&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#filesmatch). If any mixing is done, please remember the [merging](https://httpd.apache.org/docs/2.4/sections.html#merging).
 
 <a name="threadsafe">**)</a><br />
-The definition of [Thread_safety](https://en.wikipedia.org/wiki/Thread_safety) speaks about separate threads accessing shared resources. 
+The Wikipedia definition of [Thread_safety](https://en.wikipedia.org/wiki/Thread_safety) speaks about separate threads accessing shared resources. 
 Since mod_serializer is intended to be run in Apache [pre-fork](https://httpd.apache.org/docs/2.4/mod/prefork.html) environment, there is no threads within Apache. But each Apache worker run as separate computer process.
 So I'm interpreting each computer process as a separate thread and the [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub> as shared resource. 
 Maybe the better term here would be mutual exclusion process [Synchronization](https://en.wikipedia.org/wiki/Synchronization_(computer_science)).
