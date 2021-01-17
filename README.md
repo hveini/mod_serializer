@@ -26,15 +26,15 @@ The mod_serializer was borned.
 ## Implementation
 
 Each request has its own unique lock file, having the timestamp in it.<br />
-The implementation has two hooks, one in early phase of the Apache request handling and one in the very late.<br />
-The normal request processing happens between the two.<br />
+The implementation has two hooks, one before request content processing phase(ap_hook_fixups) of the Apache request handling and second in after the the request has been handled (ap_hook_log_transaction).<br />
+The request content processing happens between the two.<br />
 The early hook waits in the queue, and the later will remove the lock file.<br />
 
-When request arrives:
-1. The lock file for the request is created
+When a request arrives:
+1. A lock file for it is created
 1. Wait, as long as any earlier lock file exists
 1. The [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub> tasks are processed normally
-1. The lock file for the request is removed
+1. A lock file is removed
 
 The queue to be used for each configured [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub>, is determinated by **SerializerPrefix** and **SerializerPath** directives. If they both are the same, the queue is the same.
 
@@ -42,8 +42,7 @@ If there are too many requests in queue already, or the waiting in queue takes t
 
 ## Installation
 
-The mod_serializer is only tested in 64 bit Linux using Apache version 2.4 with [Apache MPM prefork](https://httpd.apache.org/docs/2.4/mod/prefork.html) module.
-Use the [APXS](https://httpd.apache.org/docs/2.4/programs/apxs.html) to compile and setup the module.
+The mod_serializer is tested in 64 bit Centos 7.9  and 64 bit Ubuntu 20.04, using Apache version 2.4 with [Apache MPM prefork](https://httpd.apache.org/docs/2.4/mod/prefork.html) module. Use the [APXS](https://httpd.apache.org/docs/2.4/programs/apxs.html) to compile and setup the module.
 
 ### Install dependencies
 #### RHEL/Centos based:
@@ -65,14 +64,14 @@ mod_serializer can be configured with directives inside Apache configuration [&l
 
 Directive | Discription | Default  value
 --------- | ----------- | --------------
-Serializer | Enable or disable the mod_serializer | Off
-SerializerPath | Path for lock files | Default system temp dir (/tmp)
-SerializerPrefix | Prefix for lock files | "serializer_"
-SerializerSkipMethods | Comma separated list of HTTP methods to skip | " "
-SerializerTimeout | Max time in seconds to wait in queue | 60
-SerializerQueLen | Max request amount in wait queue | 0 (==no limit)
-SerializerErrorCode | HTTP error code to use, when timeout | 500
-SerializerErrorResp | Mime type and string to send as HTTP body for error code| "" ""
+[Serializer](#Serializer) | Enable or disable the mod_serializer | Off
+[SerializerPath](#SerializerPath) | Path for lock files | Default system temp dir (/tmp)
+[SerializerPrefix](#SerializerPrefix) | Prefix for lock files | "serializer_"
+[SerializerSkipMethods](#SerializerSkipMethods) | Comma separated list of HTTP methods to skip | " "
+[SerializerTimeout](#SerializerTimeout) | Max time in seconds to wait in queue | 60
+[SerializerQueLen](#SerializerQueLen) | Max request amount in wait queue | 0 (==no limit)
+[SerializerErrorCode](#SerializerErrorCode) | HTTP error code to use, when timeout | 500
+[SerializerErrorResp](#SerializerErrorResp) | Mime type and string to send as HTTP body for error code| "" ""
 
 ### Serializer
 **Description:** Enable or disable the mod_serializer<br />
@@ -95,7 +94,7 @@ Any other value will disable.
 **Context:** [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub><br />
 **Compatibility:** 2.4<br />
 
-The lock file is created for each HTTP request. **SerializerPath** defines the directory where the files are created for this **Context**.<br />
+A lock file is created for each HTTP request. **SerializerPath** defines the directory where the files are created for this **Context**.<br />
 
 If not given, the operating system default temp directory (/tmp) is used.
 
@@ -110,7 +109,7 @@ For best performance, use separate **SerializerPath** for each queue. This way, 
 **Context:** [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub><br />
 **Compatibility:** 2.4<br />
 
-The lock file is created for each HTTP request. **SerializerPrefix** defines the string to start the lock file for this **Context**.
+A lock file is created for each HTTP request. **SerializerPrefix** defines the string to start the lock file name for this **Context**.
 **SerializerPath** and **SerializerPrefix** together defines the queue to use. If they both are the same, the queue is the same.
 
 ### SerializerSkipMethods
@@ -139,7 +138,7 @@ Defines the maximum time the request waits in queue, before **SerializerErrorCod
 **Compatibility:** 2.4<br />
 
 Defines the maximum amount of request allowed in queue. Value 0, means mod_serializer do not limit the queue length.
-If there already are more than **SerializerQueLen** requests in the queue, **SerializerErrorCode** is send back and no more actions are perfoemed.
+If there already are more than **SerializerQueLen** requests in the queue, **SerializerErrorCode** is send back and no more actions are performed.
 
 ### SerializerErrorCode
 **Description:** HTTP error code to use, when timeout or max requests in queue<br />
@@ -148,6 +147,9 @@ If there already are more than **SerializerQueLen** requests in the queue, **Ser
 **Context:** [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub><br />
 **Compatibility:** 2.4<br />
 
+By default mod_serializer sends [HTTP status code](https://en.wikipedia.org/wiki/List_of_HTTP_status_codes) 500 "Internal Server Error" back, 
+if the **SerializerTimeout** or **SerializerQueLen** exceeds. Use **SerializerErrorCode** to send different value.
+
 ### SerializerErrorResp
 **Description:** Mime type and string to send as HTTP body for error code<br />
 **Syntax:** SerializerErrorResp "&lt;mime type&gt;" "&lt;http body&gt;" <br />
@@ -155,7 +157,7 @@ If there already are more than **SerializerQueLen** requests in the queue, **Ser
 **Context:** [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub><br />
 **Compatibility:** 2.4<br />
 
-If there is a timeout or the queue is too long:
+If **SerializerErrorCode** is sent back:
 * when **SerializerErrorResp** "&lt;mime type&gt;" and "&lt;http body&gt;" are set, those values are send back in HTTP response. 
 * when not set, the Apache default response is used
 
@@ -199,8 +201,6 @@ in the server error log.</p>
 ```
 
 
-
-
 ## Example
 
 mod_serializer respects the configuration [merging](https://httpd.apache.org/docs/2.4/sections.html#merging) of the [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub><br />
@@ -214,7 +214,6 @@ Create a directory for the mod_serializer queue with proper rights (This is for 
 ```
 In Apache configuration file:
 ```
-LogLevel serializer:debug
 <VirtualHost *:80>
 .
 .
@@ -286,7 +285,6 @@ SerializerErrorCode   | 500
 SerializerErrorResp   | " " " "
 
 The last LocationMatch, is to disable mod_serialize, e.g. from /a/c.<br />
-The **LogLevel** definition shows how to enable debugging for mod_serialized. It has to be outside of **VirtualHost** definition.
 
 
 #### Queue
@@ -296,7 +294,7 @@ All locations uses the same directory for lock files, since they have the same *
 
 From mod_serializer point of view, the requests are handled in pre-defined order, and mainly in the order they have arrived.
 
-When the request arrives, the uniquely named lock file is created for it. The lock file name is:
+When the request arrives, an uniquely named lock file is created for it. The lock file name format is:
 
 ```<prefix><timestamp><family><port><ip>```
 
@@ -307,13 +305,13 @@ Where:<br />
 **port**: is the client port number, 8 digits long.<br />
 **ip**: is the client IP address (in IPv4 or in IPv6 format, depending how it is received)<br />
 
-The timestamp is generated just before the file is written and it changes every microsecond. So, it is quite rear for many requests to have exactly the same timestamp. But, still it is possible. This is why there are other elements in the lock file name, making it unique in mod_serializer point of view.
+The timestamp is generated just before the file is written and it changes every microsecond. So, it is quite rear for many requests to have exactly the same timestamp, but still possible. This is why there are other elements in the lock file name, making it unique in mod_serializer point of view.
 
 After the lock file is written, all the lock files starting with **SerializerPrefix** in **SerializerPath** directory are gone through and the lock file name, before this request lock file is searched. If it exists, mod_seriaizer waits untill it is gone.
 
 This search uses C library function [strcmp](https://en.wikibooks.org/wiki/C_Programming/string.h/strcmp), witch compares strings and returns which one is "less" or "greater". Since the lock file name has the timestamp after prefix, the returned "less" means the other lock file is created earlier. Using this knowledge, the lock file which is before this request in queue can be found.
 
-And in the rare case, where the timestamps equals, the compare result will depend on the other elements, but returns always the same order.
+In the rare case, where the timestamps equals, the compare result will depend on the other elements, but returns always the same order.
 
 Example, if the queue-files would look like:<br />
 a_0000160969386537851501000036794192.168.0.1<br />
@@ -323,11 +321,16 @@ a_0000160969386539149501000036834192.168.0.1<br />
 a_0000160969386539565001000036850192.168.0.1<br />
 
 And the lock file for our request is "**a_0000160969386539491601000036848192.168.0.1**", the mod_seriaizer would wait as long as files:<br />
+
 a_0000160969386537851501000036794192.168.0.1<br />
 a_0000160969386538884701000036824192.168.0.1<br />
 a_0000160969386539149501000036834192.168.0.1<br />
 
 exists.
+
+## Debugginh
+To enable debugging, compile mod_serializer with DEBUG defined. e.g:
+sudo apxs -DDEBUG -i -a -c mod_serializer.c<br />
 
 <a name="location">*)</a><br />
 In this document, the [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) is used as an example configuration.<br />
@@ -340,6 +343,6 @@ Also, mod_serializer configurations can be made with any other directory directi
 
 <a name="threadsafe">**)</a><br />
 The Wikipedia definition of [Thread_safety](https://en.wikipedia.org/wiki/Thread_safety) speaks about separate threads accessing shared resources. 
-Since mod_serializer is intended to be run in Apache [pre-fork](https://httpd.apache.org/docs/2.4/mod/prefork.html) environment, there is no threads within Apache. But each Apache worker run as separate computer process.
+Since mod_serializer is intended to be run in Apache [pre-fork](https://httpd.apache.org/docs/2.4/mod/prefork.html) environment, there are no threads within Apache, but each Apache worker runs in separate ([forked](https://en.wikipedia.org/wiki/Fork_(system_call))) computer process.
 So I'm interpreting each computer process as a separate thread and the [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub> as shared resource. 
 Maybe the better term here would be mutual exclusion process [Synchronization](https://en.wikipedia.org/wiki/Synchronization_(computer_science)).
