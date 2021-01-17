@@ -1,0 +1,4 @@
+.libs
+mod_serializer.la
+mod_serializer.lo
+mod_serializer.slo

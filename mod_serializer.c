@@ -14,8 +14,8 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
-* 
- * Apache web server module to make paraller requests serial.
+ * 
+ * Apache web server module to make parallel requests serial.
  * 
  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  */
@@ -71,11 +71,24 @@ typedef struct
 
 /*
  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    static variables
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
+static apr_pool_t *serializer_conf_pool;
+static server_rec *sr;
+
+/*
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     Macros
  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
+#ifdef DEBUG
+
+#define DEBUG_RLOG(r,...) ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "DEBUG:" __VA_ARGS__);
+#define DEBUG_LOG(...) ap_log_error(APLOG_MARK, APLOG_ERR, 0, sr, "DEBUG:" __VA_ARGS__);
+
 #define PRINT_SERIALIZER_CONFIG(conf,r,firstpart) \
-ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "%s on%s='%d', skip%s='%s', ld%s='%s', prefix%s='%s', mime%s='%s', resp%s='%s', ec%s='%ld', to%s='%ld', ql%s='%ld'", firstpart,\
+ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "DEBUG:%s on%s='%d', skip%s='%s', ld%s='%s', prefix%s='%s', mime%s='%s', resp%s='%s', ec%s='%ld', to%s='%ld', ql%s='%ld',handler='%s', uri='%s'", firstpart,\
               (0 < (SERIALIZER_ENABLED & conf->enabled)) ? "+" : "-",\
               conf->enabled,\
               (0 < (SERIALIZER_SKIP_METHODS & conf->setmap)) ? "+" : "-",\
@@ -93,15 +106,15 @@ ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "%s on%s='%d', skip%s='%s', ld%s='%s'
               (0 < (SERIALIZER_TIMEOUT & conf->setmap)) ? "+" : "-",\
               conf->timeout,\
               (0 < (SERIALIZER_QUELEN & conf->setmap)) ? "+" : "-",\
-              conf->quelen);\
+              conf->quelen,r->handler,r->uri);
+#else
 
-/*
- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    static variables
- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- */
-static apr_pool_t *serializer_conf_pool;
-static server_rec *sr;
+#define DEBUG_RLOG(r, ...) ;
+#define DEBUG_LOG(...) ;
+#define PRINT_SERIALIZER_CONFIG(conf, r, firstpart) ;
+
+#endif
+
 /*
  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     prototype
@@ -119,6 +132,7 @@ module AP_MODULE_DECLARE_DATA serializer_module;
  * 1, timeout
  * 2, queue full
  * 3, error
+ * 4, file exists for same client
  */
 int wait_in_que(request_rec *r,serializer_module_config_t *config, char *lockfile, apr_time_t timeout)
 {
@@ -128,7 +142,6 @@ int wait_in_que(request_rec *r,serializer_module_config_t *config, char *lockfil
     apr_dir_t *dir=NULL;
     apr_finfo_t dirent;
     int filecount = 0;
-    int err = 1;
     int chkFileCount=1;
     int ret=0;
     char *fileToWait=NULL;
@@ -143,21 +156,23 @@ int wait_in_que(request_rec *r,serializer_module_config_t *config, char *lockfil
         if (0 != config->timeout && timeout < apr_time_now())
         {
             ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r, "serializer: Timeout when waiting '%s'", r->uri);
-            ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r, "serializer: Timeout ftw='%s'", fileToWait);
+            DEBUG_RLOG(r, "serializer: Timeout ftw='%s'", fileToWait)
             ret = 1;
             break;
         }
         // wait the earlier lock file to go a way
         if (NULL != fileToWait)
         {
-            apr_sleep(10); // wait 10 micro seconds
+            apr_sleep(5000); // wait 5 milli seconds==0.005sec
             struct stat stats;
             //try to get file stat
             if (0 != stat(fileToWait, &stats))
             {
+#ifdef DEBUG
                 apr_time_t t = apr_time_now() - (timeout - ((apr_time_t)config->timeout * 1000000));
-                ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "serializer: ftw='%s' gone in '%ld' microSecs", fileToWait, t);
-                fileToWait=NULL;
+                DEBUG_RLOG(r, "serializer: ftw='%s' gone in '%ld' microSecs", fileToWait, t)
+#endif
+                fileToWait = NULL;
             }
             continue;
         }
@@ -168,14 +183,18 @@ int wait_in_que(request_rec *r,serializer_module_config_t *config, char *lockfil
             ret=3;
             break;
         }
+#ifdef DEBUG
+        apr_int64_t tFirst=0;
+        const char *fFirst=NULL;
+#endif
         //go throug all files in the dir
         while ((apr_dir_read(&dirent, APR_FINFO_NAME | APR_FINFO_TYPE, dir)) == APR_SUCCESS)
         {
+            // file is in  same queue
             if (APR_REG == dirent.filetype &&
                 strlen(dirent.name) > (31 + strlen(config->prefix)) &&
                 0 == memcmp(dirent.name, config->prefix, strlen(config->prefix)))
             {
-                // file is in  same queue
                 //remove any 5 minutes old file
                 // in practice, this should not ever happen, but just to be safe
                 char *ft = apr_psprintf(r->pool, "%s", "00000000000000000000");
@@ -188,25 +207,48 @@ int wait_in_que(request_rec *r,serializer_module_config_t *config, char *lockfil
                     apr_file_remove((const char *)f_with_path, r->pool);
                     continue;
                 }
-                if (0 != chkFileCount)
-                {
-                    filecount++;
+#ifdef DEBUG
+                if(0==tFirst){
+                    tFirst = t;
+                    fFirst = dirent.name;
+                }else if(t<tFirst){
+                    tFirst = t;
+                    fFirst = dirent.name;
                 }
+#endif
                 //check if the file to compare is created earlier than lockfile file to wait
                 if ( 0 < strcmp(lockfile, dirent.name))
                 {
-                    if ( NULL == fileToWait)
+                    //Any file already for this same client
+                    char *ff = apr_psprintf(r->pool, "%s", "000");
+                    memcpy(ff, &dirent.name[strlen(config->prefix) + 20], 3);
+                    int family = apr_atoi64(ff);
+                    char *fp = apr_psprintf(r->pool, "%s", "00000000");
+                    memcpy(fp, &dirent.name[strlen(config->prefix) + 23], 8);
+                    int port = apr_atoi64(fp);
+                    char *ip = (char *)&dirent.name[strlen(config->prefix) + 31];
+                    if (r->connection->client_addr->family == family &&
+                        r->connection->client_addr->port == port &&
+                        0 == strcmp(r->useragent_ip, ip))
+                    {
+                        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r, "Skip same client '%s'", dirent.name);
+                        fileToWait = NULL;
+                        ret = 4;
+                        break;
+                    }
+                    if (NULL == fileToWait)
                     {
                         // initial
                         fileToWait = (char *)dirent.name;
-                        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "0ftw='%s'", fileToWait);
+//                        DEBUG_RLOG(r, "0ftw='%s'", fileToWait)
                     }
                     else if (0 > strcmp(fileToWait, dirent.name))
                     {
                         // older than previus one
                         fileToWait = (char *)dirent.name;
-                        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "1ftw='%s'", fileToWait);
+//                        DEBUG_RLOG(r, "1ftw='%s'", fileToWait)
                     }
+                    filecount++;
                 }
             }
         }
@@ -216,7 +258,7 @@ int wait_in_que(request_rec *r,serializer_module_config_t *config, char *lockfil
             if (0 != config->quelen && filecount > config->quelen)
             {
                 ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r, "Queue full when waiting '%s'", r->uri);
-                ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "Queue has '%d', max='%ld''", filecount, config->quelen);
+                DEBUG_RLOG(r, "Queue has '%d', max='%ld''", filecount, config->quelen)
                 ret = 2;
                 break;
             }
@@ -224,10 +266,12 @@ int wait_in_que(request_rec *r,serializer_module_config_t *config, char *lockfil
         if (NULL != fileToWait)
         {
             fileToWait = apr_psprintf(r->pool, "%s/%s", config->lockdir, fileToWait);
-            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "ftw='%s'", fileToWait);
-        }else 
+#ifdef DEBUG
+            DEBUG_RLOG(r, "ftw='%s', filecount='%d', t='%ld',ff='%s'", fileToWait, filecount, apr_time_now() - tFirst, fFirst)
+#endif
+        }else
         {
-            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "No ftw");
+            DEBUG_RLOG(r, "No ftw")
             break;
         }
     }
@@ -235,7 +279,7 @@ int wait_in_que(request_rec *r,serializer_module_config_t *config, char *lockfil
     {
         apr_dir_close(dir);
     }
-    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "ret=%d",ret);
+    DEBUG_RLOG(r, "ret=%d",ret)
     return ret;
 }
 
@@ -246,25 +290,33 @@ int wait_in_que(request_rec *r,serializer_module_config_t *config, char *lockfil
 */
 static int serializer_first(request_rec *r)
 {
-    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "serializer_first: h='%s', uri='%s'", r->handler, r->uri);
-
     apr_pool_t *p = r->pool;
     serializer_module_config_t *config = (serializer_module_config_t *)ap_get_module_config(r->per_dir_config, &serializer_module);
-
-    PRINT_SERIALIZER_CONFIG(config, r, "first")
     // return if not enabled
-    // return if sub reg
-    if (0 == config->enabled || r->main)
+    if (0 == config->enabled)
     {
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "DECLINED: enebled='%d', sub='%s'", config->enabled, (r->main) ? "Yes" : "No");
         return (DECLINED);
     }
 
+    // return if sub reg
+    // return if internal redirect reg
+    if (0 == config->enabled || r->main || r->prev || r->next)
+    {
+        DEBUG_RLOG(r, "DECLINED: sub_rec='%s', int_redirect='%s', ext_redirect='%s'",
+                   (r->main) ? "Yes" : "No",
+                   (r->prev) ? "Yes" : "No",
+                   (r->next) ? "Yes" : "No")
+        PRINT_SERIALIZER_CONFIG(config, r, "decline")
+        return (DECLINED);
+    }
+
+    DEBUG_RLOG(r, "serializer_first: h='%s', uri='%s'", r->handler, r->uri)
+    PRINT_SERIALIZER_CONFIG(config, r, "first")
     // return if ignore r->method
     char *chk_str = apr_psprintf(p, " %s ", r->method);
     if (NULL != strstr(config->skip_methods, chk_str))
     {
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "DECLINED: '%s' in '%s'", chk_str, config->skip_methods);
+        DEBUG_RLOG(r, "DECLINED: '%s' in '%s'", chk_str, config->skip_methods)
         return (DECLINED);
     }
 
@@ -272,7 +324,7 @@ static int serializer_first(request_rec *r)
     char *lockfile_with_path = (char *)apr_table_get(r->notes, "serializer_lockfile_with_path");
     if( NULL!=lockfile_with_path )
     {
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "DECLINED: lf='%s'", lockfile_with_path);
+        DEBUG_RLOG(r, "DECLINED: lf='%s'", lockfile_with_path)
         return (DECLINED);
     }
 
@@ -305,7 +357,7 @@ static int serializer_first(request_rec *r)
     //set the file name to be deleted in 'serializer_last'
     apr_table_set(r->notes, "serializer_lockfile_with_path", lockfile_with_path);
 
-    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "lf='%s'", lockfile_with_path);
+    DEBUG_RLOG(r, "lf='%s'", lockfile_with_path)
     switch (wait_in_que(r, config, lockfile, timeout))
     {
     case 0: //OK
@@ -322,6 +374,10 @@ static int serializer_first(request_rec *r)
             return DONE;
         }
         return config->errorCode;
+        break;
+    case 4: //File for this same client exists, remove lock file and continue
+        apr_file_remove(lockfile_with_path, r->pool);
+        apr_table_unset(r->notes, "serializer_lockfile_with_path");
         break;
     default: // error
         apr_file_remove(lockfile_with_path, r->pool);
@@ -344,12 +400,13 @@ static int serializer_last(request_rec *r)
     if( NULL!=lockfile_with_path ){
         apr_file_remove(lockfile_with_path, r->pool);
         apr_table_unset(r->notes, "serializer_lockfile_with_path");
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "serializer_last, remove '%s'", lockfile_with_path);
-
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "serializer_last: '%s'", r->handler);
+#ifdef DEBUG
+        DEBUG_RLOG(r, "serializer_last, remove '%s'", lockfile_with_path)
+        DEBUG_RLOG(r, "serializer_last: '%s'", r->handler)
         serializer_module_config_t *config = (serializer_module_config_t *)ap_get_module_config(r->per_dir_config, &serializer_module);
         PRINT_SERIALIZER_CONFIG(config, r, "last")
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "bytes_sent='%ld'", r->bytes_sent);
+        DEBUG_RLOG(r, "serializer_last: bytes_sent='%ld'", r->bytes_sent)
+#endif
     }
     return DECLINED;
 }
@@ -366,7 +423,7 @@ const char *serializer_on(cmd_parms *cmd, void *cfg, const char *arg)
         conf->enabled = 1;
     else
         conf->enabled = 0;
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, sr, "conf->enabled='%d'", conf->enabled);
+    DEBUG_LOG("conf->enabled='%d'", conf->enabled);
     conf->setmap |= SERIALIZER_ENABLED;
     return NULL;
 }
@@ -381,7 +438,7 @@ const char *serializer_set_timeout(cmd_parms *cmd, void *cfg, const char *arg)
     serializer_module_config_t *conf = (serializer_module_config_t *)cfg;
     conf->timeout = apr_atoi64(arg);
     conf->setmap |= SERIALIZER_TIMEOUT;
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, sr, "conf->timeout='%ld'", conf->timeout);
+    DEBUG_LOG("conf->timeout='%ld'", conf->timeout)
     return NULL;
 }
 
@@ -395,7 +452,7 @@ const char *serializer_set_que_len(cmd_parms *cmd, void *cfg, const char *arg)
     serializer_module_config_t    *conf = (serializer_module_config_t *) cfg;
     conf->quelen = apr_atoi64(arg);
     conf->setmap |= SERIALIZER_QUELEN;
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, sr, "conf->quelen='%ld'", conf->quelen);
+    DEBUG_LOG("conf->quelen='%ld'", conf->quelen)
     return NULL;
 }
 
@@ -409,7 +466,7 @@ const char *serializer_set_path(cmd_parms *cmd, void *cfg, const char *arg)
     serializer_module_config_t    *conf = (serializer_module_config_t *) cfg;
     conf->lockdir = apr_psprintf(serializer_conf_pool, "%s", arg);
     conf->setmap |= SERIALIZER_LOCKDIR;
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, sr, "conf->lockdir='%s'", conf->lockdir);
+    DEBUG_LOG("conf->lockdir='%s'", conf->lockdir)
     return NULL;
 }
 /*
@@ -430,7 +487,7 @@ const char *serializer_set_skip_methods(cmd_parms *cmd, void *cfg, const char *a
             conf->skip_methods[i]=' ';
         }
     }
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, sr, "conf->skip_methods='%s'", conf->skip_methods);
+    DEBUG_LOG("conf->skip_methods='%s'", conf->skip_methods)
     // Now conf->skip_methods is a string with capital letter http methods separated by spaces, with pre and leading space
     return NULL;
 }
@@ -444,7 +501,7 @@ const char *serializer_set_prefix(cmd_parms *cmd, void *cfg, const char *arg)
     serializer_module_config_t    *conf = (serializer_module_config_t *) cfg;
     conf->prefix = apr_psprintf(serializer_conf_pool, "%s", arg);
     conf->setmap |= SERIALIZER_PREFIX;
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, sr, "conf->prefix='%s'", conf->prefix);
+    DEBUG_LOG("conf->prefix='%s'", conf->prefix)
     return NULL;
 }
 
@@ -458,7 +515,7 @@ const char *serializer_set_error_code(cmd_parms *cmd, void *cfg, const char *arg
     serializer_module_config_t    *conf = (serializer_module_config_t *) cfg;
     conf->errorCode = apr_atoi64(arg);
     conf->setmap |= SERIALIZER_ERRORCODE;
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, sr, "conf->errorCode='%ld'", conf->errorCode);
+    DEBUG_LOG("conf->errorCode='%ld'", conf->errorCode)
     return NULL;
 }
 
@@ -473,8 +530,8 @@ const char *serializer_set_error_resp(cmd_parms *cmd, void *cfg, const char *arg
     conf->mime = apr_psprintf(serializer_conf_pool, "%s", arg1);
     conf->resp = apr_psprintf(serializer_conf_pool, "%s", arg2);
     conf->setmap |= SERIALIZER_MIME + SERIALIZER_RESP;
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, sr, "conf->mime='%s'", conf->mime);
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, sr, "conf->resp='%s'",conf->resp);
+    DEBUG_LOG("conf->mime='%s'", conf->mime)
+    DEBUG_LOG("conf->resp='%s'",conf->resp)
     return NULL;
 }
 
@@ -579,7 +636,7 @@ static void *serializer_create_server_config(apr_pool_t *p, server_rec *s)
     serializer_server_config_t *cfg = apr_pcalloc(p, sizeof(serializer_server_config_t));
     sr = s;
     cfg->s=s;
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, sr, "in ='%s'", "serializer_create_server_config");
+    DEBUG_LOG("in ='%s'", "serializer_create_server_config")
     return cfg;
 }
 

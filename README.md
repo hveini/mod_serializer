@@ -48,8 +48,10 @@ Use the [APXS](https://httpd.apache.org/docs/2.4/programs/apxs.html) to compile 
 ### Install dependencies
 #### RHEL/Centos based:
 Enable [epel](https://fedoraproject.org/wiki/EPEL)<br />
-yum install httpd-devel<br />
+sudo yum group install "Development Tools"<br />
+sudo yum install  httpd-devel<br />
 #### Debian based:
+sudo apt install build-essential<br />
 sudo apt install apache2-dev<br />
 
 ### get the source and compile:
