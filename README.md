@@ -25,16 +25,17 @@ The mod_serializer was borned.
 
 ## Implementation
 
-Each request has its own unique lock file, having the timestamp in it.<br />
-The implementation has two hooks, one before request content processing phase(ap_hook_fixups) of the Apache request handling and second in after the the request has been handled (ap_hook_log_transaction).<br />
+Each request has its own unique lock file, having the timestamp in the name.<br />
+The implementation has two hooks, one before content processing phase (ap_hook_fixups) and second after the the request has been handled (ap_hook_log_transaction).<br />
 The request content processing happens between the two.<br />
-The early hook waits in the queue, and the later will remove the lock file.<br />
 
-When a request arrives:
+Request processing in the mod_serializer point of view:
 1. A lock file for it is created
 1. Wait, as long as any earlier lock file exists
 1. The [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub> tasks are processed normally
 1. A lock file is removed
+
+1 and 2 happens in the early hook. 4 in the later.<br />
 
 The queue to be used for each configured [&lt;Location&gt;](https://httpd.apache.org/docs/2.4/mod/core.html#location) <sub>[*](#location)</sub>, is determinated by **SerializerPrefix** and **SerializerPath** directives. If they both are the same, the queue is the same.
 
