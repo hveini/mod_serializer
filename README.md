@@ -223,7 +223,7 @@ In Apache configuration file:
     Serializer On
     SerializerPath "/opt/serializer"
     SerializerPrefix "a_"
-    SerializerSkipMethods "option,get"
+    SerializerSkipMethods "options,get"
     SerializerTimeout 10
     SerializerQueLen 20
 </Location>
@@ -239,7 +239,7 @@ In Apache configuration file:
 <Location "/a/b/c">
     SerializerPrefix "abc_"
     SerializerErrorCode 500
-    SerializerSkipMethods "GET,OPTION,PATCH"
+    SerializerSkipMethods "GET,OPTIONS,PATCH"
     SerializerErrorResp " " " "
 </Location>
 
@@ -257,7 +257,7 @@ Directive |             Value
 ---------             | -----
 SerializerPath        | "/opt/serializer"
 SerializerPrefix      | "a_"
-SerializerSkipMethods | "OPTION,GET"
+SerializerSkipMethods | "OPTIONS,GET"
 SerializerTimeout     | 10
 SerializerQueLen      | 20
 SerializerErrorCode   | 500
@@ -268,7 +268,7 @@ Directive |             Value
 ---------             | -----
 SerializerPath        | "/opt/serializer"
 SerializerPrefix      | "ab_"
-SerializerSkipMethods | "OPTION,GET"
+SerializerSkipMethods | "OPTIONS,GET"
 SerializerTimeout     | 20
 SerializerQueLen      | 0
 SerializerErrorCode   | 404
@@ -279,7 +279,7 @@ Directive |             Value
 ---------             | -----
 SerializerPath        | "/opt/serializer"
 SerializerPrefix      | "abc_"
-SerializerSkipMethods | "GET,OPTION,PATCH"
+SerializerSkipMethods | "GET,OPTIONS,PATCH"
 SerializerTimeout     | 20
 SerializerQueLen      | 0
 SerializerErrorCode   | 500
@@ -329,8 +329,8 @@ a_0000160969386539149501000036834192.168.0.1<br />
 
 exists.
 
-## Debugginh
-To enable debugging, compile mod_serializer with DEBUG defined. e.g:
+## Debugging
+To enable debugging, compile mod_serializer with DEBUG defined. e.g:<br />
 sudo apxs -DDEBUG -i -a -c mod_serializer.c<br />
 
 <a name="location">*)</a><br />
